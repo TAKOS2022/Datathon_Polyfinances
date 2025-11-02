@@ -1,6 +1,10 @@
 import os
 from pathlib import Path
 from typing import Optional, Union, Dict
+import json
+import boto3
+
+
 
 def extract_text_from_any_file(file_path: Union[str, Path]) -> Optional[str]:
     """
@@ -97,6 +101,86 @@ def detect_language(text: str) -> str:
         return "Erreur: La bibliothèque langdetect n'est pas installée"
     except Exception as e:
         return f"Erreur detection de langue : {str(e)}"
+    
+
+def translate_and_structure_bedrock(text: str, source_lang: str) -> str:
+    """Traduit + structure en Markdown avec Bedrock (1 appel optimisé)."""
+    
+    client = boto3.client('bedrock-runtime', region_name='us-east-1')
+    
+    if source_lang == 'en':
+        # Si déjà anglais, juste structurer
+        prompt = f"""Structure this English regulatory document into clean Markdown.
+
+Rules: Clear headings (# ## ###), lists, preserve all data, remove formatting artifacts.
+
+Document:
+{text[:400000]}
+
+Return ONLY Markdown:"""
+    
+    else:
+        # Traduction en anglais + structuration
+        prompt = f"""Translate this document to English AND structure it as Markdown.
+
+Rules:
+- Accurate translation to English (preserve dates, numbers, names)
+- Clean Markdown structure (# ## ###, lists)
+- Full content, no summary
+- Remove formatting artifacts
+
+Document:
+{text[:400000]}
+
+Return ONLY English Markdown:"""
+    
+    response = client.invoke_model(
+        modelId='anthropic.claude-3-haiku-20240307-v1:0',
+        body=json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 100000,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1
+        })
+    )
+    
+    result = json.loads(response['body'].read())
+    return result['content'][0]['text']
+
+
+def preprocess_document_to_markdown(
+    file_path: Union[str, Path],
+    output_dir: Union[str, Path] = "processed_docs"
+) -> Optional[Path]:
+    """Pipeline complet 100% Bedrock."""
+    file_path = Path(file_path)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True)
+    
+    print(f"\n{'='*60}\n📄 {file_path.name}\n{'='*60}\n")
+    
+    # Extraction
+    print("1️⃣ Extracting...")
+    text = extract_text_from_any_file(file_path)
+    if not text:
+        return None
+    
+    # Détection langue
+    print("2️⃣ Detecting language...")
+    lang = detect_language(text)
+    print(f"   → {lang}\n")
+    
+    # Traduction + Structuration
+    print("3️⃣ Processing with Bedrock...")
+    markdown = translate_and_structure_bedrock(text, lang)
+    
+    # Sauvegarde
+    output_file = output_dir / f"{file_path.stem}.md"
+    output_file.write_text(markdown, encoding='utf-8')
+    
+    print(f"✅ {output_file}\n")
+    return output_file
+
 
 
 
@@ -104,9 +188,5 @@ def detect_language(text: str) -> str:
 if __name__ == "__main__":
     # Test avec un fichier
     file_path = r"Data Justin\directives\1.DIRECTIVE (UE) 20192161 DU PARLEMENT EUROPÉEN ET DU CONSEIL.html"
-    text = extract_text_from_any_file(file_path)
-    
-    if text:
-        print(f"\n\nTexte extrait ({len(text)} caractères):\n")
-        # print(text[:1000])  # Afficher les 1000 premiers caractères
-        print(detect_language(text))
+  
+    preprocess_document_to_markdown(file_path)
