@@ -7,3 +7,5 @@ pillow
 pytesseract
 langdetect 
 boto3
+trafilatura
+lxml
